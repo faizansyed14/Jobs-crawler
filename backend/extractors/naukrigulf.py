@@ -128,6 +128,39 @@ class NaukrigulfExtractor(BaseExtractor):
                 delay_reason=label,
             )
 
+        def _wait_after_page_inserts(
+            *, page: int, location_label: str, location_key: str
+        ) -> None:
+            """Pause before the next page — only after all jobs from this page are yielded."""
+            if page >= self.max_pages:
+                return
+            label = (
+                f"Page gap after inserts · page {page} · {location_label} "
+                f"({self.settings.page_delay_min_seconds:.0f}–"
+                f"{self.settings.page_delay_max_seconds:.0f}s random)"
+            )
+            live_status.update_progress(
+                phase="waiting",
+                message=label,
+                why=(
+                    "Random polite delay between pages. Timer starts only after "
+                    "every job from the previous page is inserted."
+                ),
+                location=location_key,
+                page=page,
+                max_pages=self.max_pages_display,
+                log=label,
+            )
+            slept = self.rate_limiter.wait_between_pages(
+                reason=f"after page {page} inserts",
+                on_tick=lambda rem, tot, lbl=label: _tick(rem, tot, label=lbl),
+            )
+            live_status.update_progress(
+                delay_seconds=round(slept, 1),
+                delay_remaining=0,
+                log=f"Page gap finished ({slept:.0f}s)",
+            )
+
         live_status.update_progress(
             phase="warming_up",
             message="Warming session cookies before first API call",
@@ -138,8 +171,7 @@ class NaukrigulfExtractor(BaseExtractor):
             log="Warming Naukrigulf session",
         )
         self.api.warmup(location=self.location_defs[0].api_value)
-        slept = self.rate_limiter.wait(
-            reason="post-warmup",
+        slept = self.rate_limiter.wait_after_warmup(
             on_tick=lambda rem, tot: _tick(rem, tot, label="Post-warmup pause"),
         )
         live_status.update_progress(
@@ -203,27 +235,6 @@ class NaukrigulfExtractor(BaseExtractor):
             empty_streak = 0
             for page in range(1, self.max_pages + 1):
                 _check_cancel()
-                if page > 1 or loc_idx > 1 or self.pages_crawled > 0:
-                    label = f"Delay before page {page} · {location.label}"
-                    live_status.update_progress(
-                        phase="waiting",
-                        message=label,
-                        why=why_delay,
-                        location=location.key,
-                        location_index=loc_idx,
-                        page=page,
-                        max_pages=self.max_pages_display,
-                        log=label,
-                    )
-                    slept = self.rate_limiter.wait(
-                        reason=f"before page {page}",
-                        on_tick=lambda rem, tot, lbl=label: _tick(rem, tot, label=lbl),
-                    )
-                    live_status.update_progress(
-                        delay_seconds=round(slept, 1),
-                        delay_remaining=0,
-                        log=f"Page delay finished ({slept:.0f}s)",
-                    )
 
                 live_status.update_progress(
                     phase="fetching",
@@ -324,6 +335,11 @@ class NaukrigulfExtractor(BaseExtractor):
                         ),
                         log=f"Empty page {page} for {location.label} (streak {empty_streak})",
                     )
+                    _wait_after_page_inserts(
+                        page=page,
+                        location_label=location.label,
+                        location_key=location.key,
+                    )
                     continue
 
                 empty_streak = 0
@@ -335,6 +351,12 @@ class NaukrigulfExtractor(BaseExtractor):
                         continue
                     self.jobs_seen += 1
                     yield listing
+
+                _wait_after_page_inserts(
+                    page=page,
+                    location_label=location.label,
+                    location_key=location.key,
+                )
 
         if self.pages_crawled == 0 and total_failures > 0:
             raise RuntimeError(

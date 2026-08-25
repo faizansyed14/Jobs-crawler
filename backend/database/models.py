@@ -29,6 +29,7 @@ class Job(Base):
         Index("idx_jobs_active", "source_portal", "is_active"),
         Index("idx_jobs_search_location", "search_location"),
         Index("idx_jobs_industry", "industry"),
+        Index("idx_jobs_fingerprint", "source_portal", "content_fingerprint"),
     )
 
     id: Mapped[Any] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
@@ -44,6 +45,8 @@ class Job(Base):
 
     search_location: Mapped[Optional[str]] = mapped_column(String(100))
     industry: Mapped[Optional[str]] = mapped_column(String(100))
+
+    content_fingerprint: Mapped[Optional[str]] = mapped_column(String(64))
 
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

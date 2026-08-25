@@ -45,19 +45,30 @@ export function JobsPanel({
   onLoadMore,
 }: Props) {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const onLoadMoreRef = useRef(onLoadMore);
+  const hasMoreRef = useRef(hasMore);
+  const loadingMoreRef = useRef(loadingMore);
+
+  useEffect(() => {
+    onLoadMoreRef.current = onLoadMore;
+    hasMoreRef.current = hasMore;
+    loadingMoreRef.current = loadingMore;
+  });
 
   useEffect(() => {
     const node = sentinelRef.current;
     if (!node) return;
     const obs = new IntersectionObserver(
       (entries) => {
-        if (entries.some((e) => e.isIntersecting)) onLoadMore();
+        if (!entries.some((e) => e.isIntersecting)) return;
+        if (!hasMoreRef.current || loadingMoreRef.current) return;
+        onLoadMoreRef.current();
       },
       { rootMargin: "240px" }
     );
     obs.observe(node);
     return () => obs.disconnect();
-  }, [onLoadMore, hasMore]);
+  }, []);
 
   return (
     <section className="card">

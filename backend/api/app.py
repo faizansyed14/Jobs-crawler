@@ -17,7 +17,7 @@ from core.excel_export import jobs_to_xlsx
 from database.analytics import JobAnalytics
 from database.db import init_db, session_scope
 from database.repository import JobRepository
-from orchestrator import CrawlResult, run_crawl
+from orchestrator import CrawlResult, run_crawl, run_distributed_crawl
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -39,10 +39,14 @@ app.add_middleware(
 
 class CrawlRequest(BaseModel):
     portal: str = "naukrigulf"
+    # Multi-portal Auto Crawl — when 2+ portals, units are round-robin interleaved.
+    portals: Optional[list[str]] = None
     locations: list[str] = Field(..., min_length=1)
     industry: Optional[str] = "it"
     # Multi-select (Auto Crawl). When set and non-empty, overrides `industry`.
     industries: Optional[list[str]] = None
+    # True → every industry each selected portal exposes (ignores industries list).
+    all_industries: bool = False
     # None = uncapped: each city crawls until its own empty-page streak stops it.
     max_pages: Optional[int] = Field(default=None, ge=1, le=500)
 
@@ -82,6 +86,18 @@ def _resolve_crawl_industries(payload: CrawlRequest) -> list[str]:
         industry=payload.industry,
         industries=payload.industries,
     )
+
+
+def _crawl_portal_list(payload: CrawlRequest) -> list[str]:
+    if payload.portals:
+        out: list[str] = []
+        for raw in payload.portals:
+            key = raw.strip().lower()
+            if key and key not in out:
+                out.append(key)
+        if out:
+            return out
+    return [payload.portal]
 
 
 @app.on_event("startup")
@@ -135,7 +151,15 @@ def pacing_meta() -> dict[str, Any]:
     return {
         "min_delay_seconds": float(getattr(settings, "min_delay_seconds", 4)),
         "max_delay_seconds": float(getattr(settings, "max_delay_seconds", 30)),
+        "page_delay_min_seconds": float(
+            getattr(settings, "page_delay_min_seconds", 6)
+        ),
+        "page_delay_max_seconds": float(
+            getattr(settings, "page_delay_max_seconds", 12)
+        ),
         "location_gap_seconds": float(getattr(settings, "location_gap_seconds", 5)),
+        "warmup_delay_seconds": float(getattr(settings, "warmup_delay_seconds", 4)),
+        "duplicate_stop_streak": int(getattr(settings, "duplicate_stop_streak", 30)),
         "max_pages_per_run": int(getattr(settings, "max_pages_per_run", 20)),
         "note": (
             "Requests are sequential with delays to reduce CAPTCHA / rate-limit risk. "
@@ -162,13 +186,23 @@ def cancel_crawl() -> dict[str, Any]:
 
 def _run_crawl_task(payload: CrawlRequest) -> None:
     try:
-        run_crawl(
-            portal=payload.portal,
-            locations=payload.locations,
-            industry=payload.industry,
-            industries=payload.industries,
-            max_pages=payload.max_pages,
-        )
+        portals = _crawl_portal_list(payload)
+        if len(portals) > 1 or payload.all_industries:
+            run_distributed_crawl(
+                portals=portals,
+                locations=payload.locations,
+                industries=payload.industries,
+                all_industries=payload.all_industries,
+                max_pages=payload.max_pages,
+            )
+        else:
+            run_crawl(
+                portal=portals[0],
+                locations=payload.locations,
+                industry=payload.industry,
+                industries=payload.industries,
+                max_pages=payload.max_pages,
+            )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Background crawl failed")
         live_status.finish(result=None, error=str(exc))
@@ -178,42 +212,78 @@ def _run_crawl_task(payload: CrawlRequest) -> None:
 def start_crawl(payload: CrawlRequest, background: BackgroundTasks) -> dict[str, Any]:
     if live_status.is_running():
         raise HTTPException(status_code=409, detail="Crawl already running")
+
+    portals = _crawl_portal_list(payload)
     try:
-        get_portal_config(payload.portal).resolve_locations(payload.locations)
-        industry_keys = _resolve_crawl_industries(payload)
+        for p in portals:
+            cfg = get_portal_config(p)
+            if len(portals) == 1:
+                cfg.resolve_locations(payload.locations)
+            else:
+                known = set(cfg.locations)
+                if not any(
+                    loc.strip().lower().replace(" ", "-").replace("_", "-") in known
+                    for loc in payload.locations
+                ):
+                    raise ValueError(f"No selected cities exist on portal {p!r}")
+            if not payload.all_industries and len(portals) == 1:
+                _resolve_crawl_industries(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     uncapped = payload.max_pages is None
-    industry_label = (
-        industry_keys[0]
-        if len(industry_keys) == 1
-        else f"{len(industry_keys)} industries"
-    )
+    if len(portals) > 1 or payload.all_industries:
+        industry_label = (
+            f"distributed · {len(portals)} portals"
+            + (" · all industries" if payload.all_industries else "")
+        )
+        industry_keys = payload.industries or []
+    else:
+        industry_keys = _resolve_crawl_industries(payload)
+        industry_label = (
+            industry_keys[0]
+            if len(industry_keys) == 1
+            else f"{len(industry_keys)} industries"
+        )
+
     live_status.reset_for_crawl(payload.locations, industry_label, payload.max_pages)
     background.add_task(_run_crawl_task, payload)
     response: dict[str, Any] = {
         "accepted": True,
-        "message": "Crawl started (sequential + polite delays)",
+        "message": (
+            "Distributed crawl started (portals interleaved)"
+            if len(portals) > 1
+            else "Crawl started (sequential + polite delays)"
+        ),
+        "portal": portals[0] if len(portals) == 1 else "+".join(portals),
+        "portals": portals,
         "locations": payload.locations,
         "industry": industry_label,
         "industries": industry_keys,
+        "all_industries": payload.all_industries,
         "max_pages": payload.max_pages,
         "mode": "auto" if uncapped else "fixed",
     }
     if uncapped:
         response["estimated_minutes"] = None
         response["note"] = (
-            "Uncapped — each city stops on its own once it hits "
-            f"{settings.empty_page_stop_streak} empty pages in a row."
+            "Uncapped — each city/industry unit stops once it hits "
+            f"{settings.empty_page_stop_streak} empty pages in a row. "
+            "Portals are round-robin interleaved to spread load."
+            if len(portals) > 1
+            else (
+                "Uncapped — each city stops on its own once it hits "
+                f"{settings.empty_page_stop_streak} empty pages in a row."
+            )
         )
     else:
         response["estimated_minutes"] = round(
             (
                 payload.max_pages
                 * len(payload.locations)
-                * max(1, len(industry_keys))
-                * (settings.min_delay_seconds + 2)
+                * max(1, len(industry_keys) or 1)
+                * max(1, len(portals))
+                * (settings.page_delay_min_seconds + 2)
             )
             / 60,
             1,
@@ -225,20 +295,33 @@ def start_crawl(payload: CrawlRequest, background: BackgroundTasks) -> dict[str,
 def crawl_sync(payload: CrawlRequest) -> dict[str, Any]:
     if live_status.is_running():
         raise HTTPException(status_code=409, detail="Crawl already running")
+    portals = _crawl_portal_list(payload)
     try:
-        get_portal_config(payload.portal).resolve_locations(payload.locations)
-        _resolve_crawl_industries(payload)
+        for p in portals:
+            get_portal_config(p)
+        if len(portals) == 1 and not payload.all_industries:
+            get_portal_config(portals[0]).resolve_locations(payload.locations)
+            _resolve_crawl_industries(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        result = run_crawl(
-            portal=payload.portal,
-            locations=payload.locations,
-            industry=payload.industry,
-            industries=payload.industries,
-            max_pages=payload.max_pages,
-        )
+        if len(portals) > 1 or payload.all_industries:
+            result = run_distributed_crawl(
+                portals=portals,
+                locations=payload.locations,
+                industries=payload.industries,
+                all_industries=payload.all_industries,
+                max_pages=payload.max_pages,
+            )
+        else:
+            result = run_crawl(
+                portal=portals[0],
+                locations=payload.locations,
+                industry=payload.industry,
+                industries=payload.industries,
+                max_pages=payload.max_pages,
+            )
         return _result_body(result)
     except Exception as exc:  # noqa: BLE001
         live_status.finish(result=None, error=str(exc))

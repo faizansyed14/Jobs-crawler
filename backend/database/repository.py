@@ -7,6 +7,7 @@ from sqlalchemy import Select, delete, desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from core.job_fingerprint import job_content_fingerprint
 from database.models import CrawlRun, CrawlState, Job
 from extractors.base import JobListing
 
@@ -15,15 +16,47 @@ class JobRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
+    def is_known_job(self, job: JobListing) -> bool:
+        """True if DB already has this listing (job_id or title+company+date hash)."""
+        fp = self._fingerprint(job)
+        row = self.session.execute(
+            select(Job.id)
+            .where(
+                Job.source_portal == job.source_portal,
+                Job.job_id == job.job_id,
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if row is not None:
+            return True
+        row = self.session.execute(
+            select(Job.id)
+            .where(
+                Job.source_portal == job.source_portal,
+                Job.content_fingerprint == fp,
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        return row is not None
+
     def upsert_job(self, job: JobListing) -> bool:
         """Insert or refresh last_seen. Returns True if newly inserted."""
         payload = self._to_row(job)
+        fp = payload["content_fingerprint"]
         existing = self.session.execute(
             select(Job).where(
                 Job.source_portal == job.source_portal,
                 Job.job_id == job.job_id,
             )
         ).scalar_one_or_none()
+
+        if existing is None:
+            existing = self.session.execute(
+                select(Job).where(
+                    Job.source_portal == job.source_portal,
+                    Job.content_fingerprint == fp,
+                )
+            ).scalar_one_or_none()
 
         if existing:
             existing.last_seen_at = datetime.now(timezone.utc)
@@ -36,6 +69,9 @@ class JobRepository:
             existing.posted_at = payload["posted_at"]
             existing.search_location = payload["search_location"]
             existing.industry = payload["industry"]
+            existing.content_fingerprint = fp
+            if existing.job_id != job.job_id:
+                existing.job_id = job.job_id
             self.session.flush()
             return False
 
@@ -179,7 +215,22 @@ class JobRepository:
         return list(self.session.execute(stmt).scalars().all())
 
     @staticmethod
+    def _fingerprint(job: JobListing) -> str:
+        return job_content_fingerprint(
+            source_portal=job.source_portal,
+            title=job.title,
+            company_name=job.company_name,
+            posted_at=job.posted_at,
+        )
+
+    @staticmethod
     def _to_row(job: JobListing) -> dict[str, Any]:
+        fp = job_content_fingerprint(
+            source_portal=job.source_portal,
+            title=job.title,
+            company_name=job.company_name,
+            posted_at=job.posted_at,
+        )
         return {
             "source_portal": job.source_portal,
             "job_id": job.job_id,
@@ -191,5 +242,6 @@ class JobRepository:
             "posted_at": job.posted_at,
             "search_location": job.search_location,
             "industry": job.industry,
+            "content_fingerprint": fp,
             "is_active": True,
         }

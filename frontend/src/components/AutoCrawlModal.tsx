@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { IndustryMeta, LocationMeta, PortalMeta } from "../api";
+import { api } from "../api";
 
 type Props = {
   open: boolean;
@@ -14,9 +15,11 @@ type Props = {
   onClose: () => void;
   onStart: (payload: {
     portal: string;
+    portals: string[];
     locations: string[];
     industry: string | null;
     industries: string[];
+    all_industries: boolean;
     max_pages: number | null;
   }) => void;
 };
@@ -25,8 +28,8 @@ export function AutoCrawlModal({
   open,
   portals,
   portal,
-  locations,
-  industries,
+  locations: _singleLocations,
+  industries: _singleIndustries,
   industry,
   running,
   onPortal,
@@ -34,30 +37,91 @@ export function AutoCrawlModal({
   onClose,
   onStart,
 }: Props) {
+  const [selectedPortals, setSelectedPortals] = useState<string[]>([]);
   const [selectedCities, setSelectedCities] = useState<string[]>([]);
   const [selectedIndustries, setSelectedIndustries] = useState<string[]>([]);
+  const [allIndustries, setAllIndustries] = useState(true);
+  const [unionLocations, setUnionLocations] = useState<LocationMeta[]>([]);
+  const [unionIndustries, setUnionIndustries] = useState<IndustryMeta[]>([]);
+  const [loadingMeta, setLoadingMeta] = useState(false);
   const [uncapped, setUncapped] = useState(true);
   const [maxPages, setMaxPages] = useState(10);
 
   useEffect(() => {
     if (!open) return;
-    setSelectedCities(locations.map((l) => l.key));
-    // Default: keep current single-industry selection; user can Select all.
-    const fallback = industry || industries[0]?.key || "it";
-    setSelectedIndustries(
-      industries.some((i) => i.key === fallback)
-        ? [fallback]
-        : industries.slice(0, 1).map((i) => i.key)
-    );
-  }, [open, locations, industries, industry]);
+    const keys = portals.map((p) => p.key);
+    setSelectedPortals(keys.length ? keys : portal ? [portal] : []);
+    setAllIndustries(true);
+    setUncapped(true);
+  }, [open, portals, portal]);
+
+  useEffect(() => {
+    if (!open || selectedPortals.length === 0) return;
+    let cancelled = false;
+    setLoadingMeta(true);
+    void Promise.all(
+      selectedPortals.map(async (key) => {
+        const [locs, inds] = await Promise.all([
+          api.locations(key),
+          api.industries(key),
+        ]);
+        return { key, locs, inds };
+      })
+    )
+      .then((packs) => {
+        if (cancelled) return;
+        const locMap = new Map<string, LocationMeta>();
+        const indMap = new Map<string, IndustryMeta>();
+        for (const pack of packs) {
+          for (const loc of pack.locs) {
+            if (!locMap.has(loc.key)) locMap.set(loc.key, loc);
+          }
+          for (const ind of pack.inds) {
+            if (!indMap.has(ind.key)) indMap.set(ind.key, ind);
+          }
+        }
+        const locs = [...locMap.values()];
+        const inds = [...indMap.values()];
+        setUnionLocations(locs);
+        setUnionIndustries(inds);
+        setSelectedCities(locs.map((l) => l.key));
+        setSelectedIndustries(inds.map((i) => i.key));
+        if (inds[0]) onIndustry(inds[0].key);
+      })
+      .catch(() => {
+        /* keep prior lists */
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingMeta(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, selectedPortals, onIndustry]);
+
+  const locations = unionLocations;
+  const industries = unionIndustries;
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, LocationMeta[]>();
+    for (const loc of locations) {
+      const list = map.get(loc.country) ?? [];
+      list.push(loc);
+      map.set(loc.country, list);
+    }
+    return map;
+  }, [locations]);
 
   if (!open) return null;
 
-  const grouped = new Map<string, LocationMeta[]>();
-  for (const loc of locations) {
-    const list = grouped.get(loc.country) ?? [];
-    list.push(loc);
-    grouped.set(loc.country, list);
+  function togglePortal(key: string) {
+    setSelectedPortals((prev) => {
+      const next = prev.includes(key)
+        ? prev.filter((k) => k !== key)
+        : [...prev, key];
+      if (next.length === 1) onPortal(next[0]);
+      return next;
+    });
   }
 
   function toggleCity(key: string) {
@@ -76,6 +140,7 @@ export function AutoCrawlModal({
   }
 
   function toggleIndustry(key: string) {
+    setAllIndustries(false);
     setSelectedIndustries((prev) => {
       const next = prev.includes(key)
         ? prev.filter((k) => k !== key)
@@ -85,20 +150,30 @@ export function AutoCrawlModal({
     });
   }
 
+  const allPortals =
+    portals.length > 0 && selectedPortals.length === portals.length;
   const allCities =
     locations.length > 0 && selectedCities.length === locations.length;
-  const allIndustries =
+  const allIndustriesSelected =
     industries.length > 0 && selectedIndustries.length === industries.length;
+
+  const canStart =
+    !running &&
+    !loadingMeta &&
+    selectedPortals.length > 0 &&
+    selectedCities.length > 0 &&
+    (allIndustries || selectedIndustries.length > 0);
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
       <div className="modal-card modal-card-wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
-            <h2>Auto Crawl — cities + industries</h2>
+            <h2>Auto Crawl — distributed sweep</h2>
             <p>
-              Pick every city and every industry filter this portal exposes.
-              Runs one-by-one until each city/industry naturally runs dry.
+              Portals are interleaved (Naukri → GulfTalent → Bayt → …) so no
+              single site gets the full load. Each step is one city + one
+              industry on one portal.
             </p>
           </div>
           <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Close">
@@ -107,21 +182,42 @@ export function AutoCrawlModal({
         </div>
 
         <div className="modal-body">
-          <div className="form-grid">
-            <label className="field">
-              <span>Portal</span>
-              <select
-                value={portal}
-                onChange={(e) => onPortal(e.target.value)}
-                disabled={running}
+          <div className="field">
+            <div className="field-label-row">
+              <span className="field-label">
+                Portals ({selectedPortals.length}/{portals.length})
+              </span>
+              <button
+                type="button"
+                className="linkish"
+                onClick={() => {
+                  if (allPortals) setSelectedPortals([]);
+                  else {
+                    const keys = portals.map((p) => p.key);
+                    setSelectedPortals(keys);
+                    if (keys[0]) onPortal(keys[0]);
+                  }
+                }}
               >
-                {portals.map((p) => (
-                  <option key={p.key} value={p.key}>
+                {allPortals ? "Clear all" : "Select all portals"}
+              </button>
+            </div>
+            <div className="check-grid">
+              {portals.map((p) => {
+                const on = selectedPortals.includes(p.key);
+                return (
+                  <label key={p.key} className={on ? "check on" : "check"}>
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      disabled={running}
+                      onChange={() => togglePortal(p.key)}
+                    />
                     {p.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                  </label>
+                );
+              })}
+            </div>
           </div>
 
           <div className="uncapped-row">
@@ -152,40 +248,66 @@ export function AutoCrawlModal({
 
           <div className="field">
             <div className="field-label-row">
-              <span className="field-label">
-                Industries ({selectedIndustries.length}/{industries.length})
-              </span>
+              <span className="field-label">Industries</span>
               <button
                 type="button"
                 className="linkish"
                 onClick={() => {
-                  if (allIndustries) {
+                  if (allIndustries || allIndustriesSelected) {
+                    setAllIndustries(false);
                     setSelectedIndustries([]);
                   } else {
-                    const keys = industries.map((i) => i.key);
-                    setSelectedIndustries(keys);
-                    if (keys[0]) onIndustry(keys[0]);
+                    setAllIndustries(true);
+                    setSelectedIndustries(industries.map((i) => i.key));
                   }
                 }}
               >
-                {allIndustries ? "Clear all" : "Select all filters"}
+                {allIndustries || allIndustriesSelected
+                  ? "Clear all"
+                  : "Select all filters"}
               </button>
             </div>
-            <div className="check-grid industry-check-grid scrollable-checks">
-              {industries.map((ind) => {
-                const on = selectedIndustries.includes(ind.key);
-                return (
-                  <label key={ind.key} className={on ? "check on" : "check"}>
-                    <input
-                      type="checkbox"
-                      checked={on}
-                      onChange={() => toggleIndustry(ind.key)}
-                    />
-                    {ind.label}
-                  </label>
-                );
-              })}
-            </div>
+            <label className="switch" style={{ marginBottom: "0.6rem" }}>
+              <input
+                type="checkbox"
+                checked={allIndustries}
+                onChange={(e) => {
+                  setAllIndustries(e.target.checked);
+                  if (e.target.checked) {
+                    setSelectedIndustries(industries.map((i) => i.key));
+                  }
+                }}
+              />
+              <span className="switch-track">
+                <span className="switch-thumb" />
+              </span>
+              <span>
+                All industries per portal (recommended for full sweep)
+              </span>
+            </label>
+            {!allIndustries && (
+              <div className="check-grid industry-check-grid scrollable-checks">
+                {industries.map((ind) => {
+                  const on = selectedIndustries.includes(ind.key);
+                  return (
+                    <label key={ind.key} className={on ? "check on" : "check"}>
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() => toggleIndustry(ind.key)}
+                      />
+                      {ind.label}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            {allIndustries && (
+              <p className="muted" style={{ margin: 0, fontSize: "0.85rem" }}>
+                Each portal crawls every industry filter it exposes
+                {loadingMeta ? " · loading…" : ""}.
+              </p>
+            )}
           </div>
 
           <div className="field">
@@ -241,25 +363,29 @@ export function AutoCrawlModal({
           <button
             type="button"
             className="btn primary"
-            disabled={
-              running || selectedCities.length === 0 || selectedIndustries.length === 0
-            }
+            disabled={!canStart}
             onClick={() =>
               onStart({
-                portal,
+                portal: selectedPortals[0] ?? portal,
+                portals: selectedPortals,
                 locations: selectedCities,
-                industry: selectedIndustries[0] ?? null,
-                industries: selectedIndustries,
+                industry: selectedIndustries[0] ?? industry ?? null,
+                industries: allIndustries ? [] : selectedIndustries,
+                all_industries: allIndustries,
                 max_pages: uncapped ? null : maxPages,
               })
             }
           >
             {running
               ? "Crawl in progress…"
-              : `Start · ${selectedCities.length} ${
+              : `Start · ${selectedPortals.length} ${
+                  selectedPortals.length === 1 ? "portal" : "portals"
+                } · ${selectedCities.length} ${
                   selectedCities.length === 1 ? "city" : "cities"
-                } · ${selectedIndustries.length} ${
-                  selectedIndustries.length === 1 ? "industry" : "industries"
+                } · ${
+                  allIndustries
+                    ? "all industries"
+                    : `${selectedIndustries.length} industries`
                 }`}
           </button>
         </div>

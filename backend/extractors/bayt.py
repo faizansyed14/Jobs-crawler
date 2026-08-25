@@ -146,6 +146,38 @@ class BaytExtractor(BaseExtractor):
                 delay_reason=label,
             )
 
+        def _wait_after_page_inserts(
+            *, page: int, location_key: str, loc_label: str
+        ) -> None:
+            if page >= self.max_pages:
+                return
+            label = (
+                f"Page gap after inserts · page {page} · {loc_label} "
+                f"({self.settings.page_delay_min_seconds:.0f}–"
+                f"{self.settings.page_delay_max_seconds:.0f}s random)"
+            )
+            live_status.update_progress(
+                phase="waiting",
+                message=label,
+                why=(
+                    "Random polite delay between pages. Timer starts only after "
+                    "every job from the previous page is inserted."
+                ),
+                location=location_key,
+                page=page,
+                max_pages=self.max_pages_display,
+                log=label,
+            )
+            slept = self.rate_limiter.wait_between_pages(
+                reason=f"after page {page} inserts",
+                on_tick=lambda rem, tot, lbl=label: _tick(rem, tot, label=lbl),
+            )
+            live_status.update_progress(
+                delay_seconds=round(slept, 1),
+                delay_remaining=0,
+                log=f"Page gap finished ({slept:.0f}s)",
+            )
+
         live_status.update_progress(
             phase="warming_up",
             message="Bayt uses browser fallback behind Cloudflare",
@@ -155,8 +187,7 @@ class BaytExtractor(BaseExtractor):
             locations_total=locations_total,
             log="Bayt crawl starting (browser-capable transport)",
         )
-        slept = self.rate_limiter.wait(
-            reason="pre-crawl",
+        slept = self.rate_limiter.wait_after_warmup(
             on_tick=lambda rem, tot: _tick(rem, tot, label="Pre-crawl pause"),
         )
         live_status.update_progress(
@@ -213,27 +244,6 @@ class BaytExtractor(BaseExtractor):
                 empty_streak = 0
                 for page in range(1, self.max_pages + 1):
                     _check_cancel()
-                    if page > 1 or unit_index > 1:
-                        label = f"Delay before page {page} · {loc_label}"
-                        live_status.update_progress(
-                            phase="waiting",
-                            message=label,
-                            why=why_delay,
-                            page=page,
-                            max_pages=self.max_pages_display,
-                            location=location.key,
-                            location_index=loc_index,
-                            log=label,
-                        )
-                        slept = self.rate_limiter.wait(
-                            reason=f"before page {page}",
-                            on_tick=lambda rem, tot, lbl=label: _tick(rem, tot, label=lbl),
-                        )
-                        live_status.update_progress(
-                            delay_seconds=round(slept, 1),
-                            delay_remaining=0,
-                            log=f"Page delay finished ({slept:.0f}s)",
-                        )
 
                     page_url = self.config.listing_url(
                         location=location,
@@ -328,6 +338,11 @@ class BaytExtractor(BaseExtractor):
                             ),
                             log=f"Empty page {page} for {location.key} (streak {empty_streak})",
                         )
+                        _wait_after_page_inserts(
+                            page=page,
+                            location_key=location.key,
+                            loc_label=loc_label,
+                        )
                         continue
 
                     empty_streak = 0
@@ -377,6 +392,12 @@ class BaytExtractor(BaseExtractor):
                             log=f"Short page {page} ({len(rows)} rows)",
                         )
                         break
+
+                    _wait_after_page_inserts(
+                        page=page,
+                        location_key=location.key,
+                        loc_label=loc_label,
+                    )
 
         if self.pages_crawled == 0 and total_failures > 0:
             raise RuntimeError(

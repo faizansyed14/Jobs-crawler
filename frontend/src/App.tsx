@@ -46,6 +46,8 @@ export default function App() {
   const [analyticsRefreshKey, setAnalyticsRefreshKey] = useState(0);
   const loadingRef = useRef(false);
   const offsetRef = useRef(0);
+  const hasMoreRef = useRef(false);
+  const wasRunningRef = useRef(false);
 
   useEffect(() => {
     void api
@@ -164,8 +166,12 @@ export default function App() {
     }
   }, [filterLocation, filterPortal]);
 
+  useEffect(() => {
+    hasMoreRef.current = hasMore;
+  }, [hasMore]);
+
   const loadMoreJobs = useCallback(async () => {
-    if (loadingRef.current || !hasMore) return;
+    if (loadingRef.current || !hasMoreRef.current) return;
     loadingRef.current = true;
     setLoadingMore(true);
     try {
@@ -195,7 +201,7 @@ export default function App() {
       loadingRef.current = false;
       setLoadingMore(false);
     }
-  }, [filterLocation, filterPortal, hasMore]);
+  }, [filterLocation, filterPortal]);
 
   useEffect(() => {
     void resetAndLoadJobs();
@@ -207,10 +213,11 @@ export default function App() {
         setRunning(status.running);
         setProgress(status.progress);
         if (status.last_result) setResult(status.last_result);
-        if (!status.running && status.last_result) {
+        if (wasRunningRef.current && !status.running && status.last_result) {
           void resetAndLoadJobs();
           setAnalyticsRefreshKey((k) => k + 1);
         }
+        wasRunningRef.current = status.running;
         if (status.error) setError(status.error);
       });
     };
@@ -240,17 +247,27 @@ export default function App() {
 
   async function launchCrawl(payload: {
     portal: string;
+    portals?: string[];
     locations: string[];
     industry: string | null;
     industries?: string[];
+    all_industries?: boolean;
     max_pages: number | null;
   }) {
     if (!payload.locations.length) {
       setError("Select at least one location");
       return;
     }
-    if (payload.industries && payload.industries.length === 0) {
+    if (
+      !payload.all_industries &&
+      payload.industries &&
+      payload.industries.length === 0
+    ) {
       setError("Select at least one industry");
+      return;
+    }
+    if (payload.portals && payload.portals.length === 0) {
+      setError("Select at least one portal");
       return;
     }
     setError(null);
@@ -277,9 +294,11 @@ export default function App() {
 
   async function startAutoCrawl(payload: {
     portal: string;
+    portals: string[];
     locations: string[];
     industry: string | null;
     industries: string[];
+    all_industries: boolean;
     max_pages: number | null;
   }) {
     setAutoModalOpen(false);
@@ -430,7 +449,7 @@ export default function App() {
             filterLocation={filterLocation}
             onFilterPortal={setFilterPortal}
             onFilterLocation={setFilterLocation}
-            onLoadMore={() => void loadMoreJobs()}
+            onLoadMore={loadMoreJobs}
             onExport={() => {
               window.open(
                 api.exportExcelUrl({

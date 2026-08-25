@@ -156,9 +156,11 @@ export const api = {
   crawlStatus: () => request<CrawlStatus>("/crawl/status"),
   startCrawl: (body: {
     portal: string;
+    portals?: string[];
     locations: string[];
     industry: string | null;
     industries?: string[];
+    all_industries?: boolean;
     max_pages?: number | null;
   }) =>
     request<{
@@ -168,6 +170,7 @@ export const api = {
       max_pages?: number | null;
       note?: string;
       industries?: string[];
+      portals?: string[];
     }>("/crawl", {
       method: "POST",
       body: JSON.stringify(body),
