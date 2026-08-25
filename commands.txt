@@ -1,0 +1,76 @@
+Job Scraper — start commands
+====================================
+
+Yes — these work:
+
+  Frontend:  npm run dev
+  Backend:   python main.py serve
+
+(Do NOT run bare `uvicorn ...` if your venv was created under an old folder
+path — console stubs can keep the old path and fail with "Fatal error in
+launcher". Prefer `python main.py serve` or `python -m uvicorn ...`, which
+go through python.exe and skip broken stubs. Recreate `.venv` — see
+"First-time only" below — to fix it for good.)
+
+
+--------------------------------------------------
+Terminal 1 — BACKEND
+--------------------------------------------------
+
+cd backend
+# Windows:   .\.venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+python main.py serve
+
+# OR equivalent (also works, avoids a broken uvicorn.exe launcher):
+# python -m uvicorn api.app:app --host 127.0.0.1 --port 8000
+
+→ http://127.0.0.1:8000
+
+
+--------------------------------------------------
+Terminal 2 — FRONTEND
+--------------------------------------------------
+
+cd frontend
+npm run dev
+
+→ http://127.0.0.1:5173
+
+(Vite proxies /api → backend :8000)
+
+
+--------------------------------------------------
+First-time only (also fixes a broken uvicorn launcher)
+--------------------------------------------------
+
+# Backend
+cd backend
+# Windows:   rmdir /s /q .venv
+# macOS/Linux: rm -rf .venv
+python -m venv .venv
+# Windows:   .\.venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+python -m pip install -r requirements.txt
+# Windows:   copy .env.example .env
+# macOS/Linux: cp .env.example .env
+python main.py init-db
+
+# Frontend
+cd frontend
+npm install
+
+
+--------------------------------------------------
+Optional CLI crawl
+--------------------------------------------------
+
+cd backend
+# activate .venv first (see above)
+python main.py crawl --portal naukrigulf --locations dubai --industry it --max-pages 2
+python main.py crawl --portal gulftalent --locations dubai --industry it --max-pages 2
+python main.py crawl --portal bayt --locations dubai --industry it --max-pages 1
+
+# GulfTalent: industry "it" = IT / Software (merged; crawls software category pages).
+# Bayt note: Cloudflare often blocks curl — Chrome (nodriver) window may open.
+# Keep pacing slow; first run may need a manual CF checkbox if challenged.

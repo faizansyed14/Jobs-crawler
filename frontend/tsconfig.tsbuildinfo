@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/components/analyticspanel.tsx","./src/components/autocrawlmodal.tsx","./src/components/crawlcontrols.tsx","./src/components/jobspanel.tsx","./src/components/linechart.tsx","./src/components/liveactivity.tsx","./src/components/worldglobe.tsx"],"version":"5.7.3"}

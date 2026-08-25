@@ -1,0 +1,63 @@
+# Secrets & local config
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
+*.cover
+.hypothesis/
+
+# Crawler runtime / session data (may contain cookies / fingerprints)
+backend/cookies/
+backend/browser_profiles/
+backend/*.db
+backend/*.db-*
+backend/*.sqlite
+backend/*.sqlite3
+**/cookies/
+**/browser_profiles/
+crawler_state/
+
+# Debug / local scratch
+backend/_debug_*.py
+backend/_probe_*.py
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# Build / misc
+dist/
+build/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Desktop.ini
