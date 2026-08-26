@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 
 from config.portals import GulfTalentConfig, LocationDef
 from config.settings import get_settings
+from core.html_totals import largest_jobs_found_count
 from core.session_manager import CookieJar
 
 logger = logging.getLogger(__name__)
@@ -122,10 +123,7 @@ class GulfTalentAPIClient:
         self.last_method = "html"
         self._persist_cookies()
         rows = self.parse_listing_rows(html)
-        total = None
-        m = _TOTAL_RE.search(html)
-        if m:
-            total = int(m.group(1).replace(",", ""))
+        total = largest_jobs_found_count(html, _TOTAL_RE)
         return {
             "url": url,
             "positions": rows,

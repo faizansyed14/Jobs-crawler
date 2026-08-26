@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 
 from config.portals import BaytConfig, LocationDef
 from config.settings import get_settings
+from core.html_totals import largest_jobs_found_count
 from core.session_manager import CookieJar
 
 logger = logging.getLogger(__name__)
@@ -177,17 +178,7 @@ class BaytClient:
         }
 
     def _parse_total(self, html: str) -> int | None:
-        m = _TOTAL_RE.search(html)
-        if not m:
-            return None
-        raw = m.group(1).replace(",", "")
-        try:
-            value = float(raw)
-        except ValueError:
-            return None
-        if m.group(2) and m.group(2).lower() == "k":
-            value *= 1000
-        return int(value)
+        return largest_jobs_found_count(html, _TOTAL_RE, k_suffix_group=2)
 
     def _looks_blocked(self, html: str) -> bool:
         low = html.lower()
