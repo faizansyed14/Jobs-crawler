@@ -48,7 +48,7 @@ class CrawlRequest(BaseModel):
     # True → every industry each selected portal exposes (ignores industries list).
     all_industries: bool = False
     # None = uncapped: each city crawls until its own empty-page streak stops it.
-    max_pages: Optional[int] = Field(default=None, ge=1, le=500)
+    max_pages: Optional[int] = Field(default=None, ge=1, le=5000)
 
 
 class JobOut(BaseModel):

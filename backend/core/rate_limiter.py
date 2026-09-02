@@ -17,6 +17,11 @@ class AdaptiveRateLimiter:
         self,
         base_delay: float | None = None,
         max_delay: float | None = None,
+        *,
+        page_delay_min: float | None = None,
+        page_delay_max: float | None = None,
+        warmup_delay: float | None = None,
+        location_gap: float | None = None,
     ) -> None:
         settings = get_settings()
         self.base_delay = (
@@ -25,10 +30,22 @@ class AdaptiveRateLimiter:
         self.max_delay = (
             max_delay if max_delay is not None else settings.max_delay_seconds
         )
-        self.location_gap = settings.location_gap_seconds
-        self.page_delay_min = settings.page_delay_min_seconds
-        self.page_delay_max = settings.page_delay_max_seconds
-        self.warmup_delay = settings.warmup_delay_seconds
+        self.location_gap = (
+            location_gap if location_gap is not None else settings.location_gap_seconds
+        )
+        self.page_delay_min = (
+            page_delay_min
+            if page_delay_min is not None
+            else settings.page_delay_min_seconds
+        )
+        self.page_delay_max = (
+            page_delay_max
+            if page_delay_max is not None
+            else settings.page_delay_max_seconds
+        )
+        self.warmup_delay = (
+            warmup_delay if warmup_delay is not None else settings.warmup_delay_seconds
+        )
         self.delay = float(self.base_delay)
 
     def on_success(self) -> None:

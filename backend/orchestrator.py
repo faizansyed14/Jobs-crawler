@@ -267,6 +267,29 @@ def _run_units(
                     result.extraction_method = getattr(
                         extractor, "last_extraction_method", "api"
                     )
+                except CrawlCancelled:
+                    raise
+                except Exception as unit_exc:  # noqa: BLE001
+                    # One unit's persistent failure (e.g. Bayt CF block) must
+                    # not abort the other 1000+ units in a distributed sweep.
+                    result.pages_crawled += getattr(extractor, "pages_crawled", 0)
+                    logger.exception(
+                        "Unit %s/%s (%s/%s/%s) failed — skipping: %s",
+                        idx,
+                        total_units,
+                        unit.portal,
+                        unit.location,
+                        unit.industry,
+                        unit_exc,
+                    )
+                    live_status.update_progress(
+                        message=(
+                            f"Unit {idx}/{total_units} failed "
+                            f"({unit.portal}/{unit.location}/{unit.industry}) — "
+                            f"skipping: {unit_exc}"
+                        ),
+                        log=f"Unit failed, skipping: {unit_exc}",
+                    )
                 finally:
                     extractor.close()
                     extractor = None

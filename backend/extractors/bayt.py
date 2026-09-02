@@ -84,7 +84,18 @@ class BaytExtractor(BaseExtractor):
         self.max_pages = max_pages or self.settings.uncapped_max_pages
         self.max_pages_display: int | None = None if self.uncapped else self.max_pages
         self.api = BaytClient(self.config)
-        self.rate_limiter = AdaptiveRateLimiter()
+        # Bayt is Cloudflare-protected — curl gets 403'd on every page at
+        # zero delay, forcing a much slower headed-Chrome fallback instead.
+        # Keep a small fixed pace here regardless of the global (instant)
+        # settings used by the other portals.
+        self.rate_limiter = AdaptiveRateLimiter(
+            base_delay=1.0,
+            max_delay=10.0,
+            page_delay_min=2.0,
+            page_delay_max=4.0,
+            warmup_delay=2.0,
+            location_gap=2.0,
+        )
         self.robots = RobotsGuard(self.config.robots_url)
         self.robots.load()
         self.last_extraction_method = "browser"
